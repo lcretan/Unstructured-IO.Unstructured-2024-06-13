@@ -31,10 +31,15 @@ SERVER_API_VERSION = "1"
 REDACTED_TEXT="***REDACTED***"
 
 def redact_unredact(uri: str, password:str, redacted_text: str, redact: bool = True) -> str:
+    if redacted_text == password:
+        logger.warning(f"Password is the same as redacted text: {redacted_text}")
+        return
+
     if redact:
         return uri.replace(password, redacted_text)
-    if not redacted_text == password:
-        return uri.replace(redacted_text, password)
+
+    # unredact
+    return uri.replace(redacted_text, password)
 
 def parse_userinfo(userinfo: str) -> t.Tuple[str, str]:
     user, _, passwd = userinfo.partition(":")
@@ -43,8 +48,8 @@ def parse_userinfo(userinfo: str) -> t.Tuple[str, str]:
 
 def return_password(uri: str) -> str:
     """
-    Cherry pick code from pymongo.uri_parser.parse_uri to only extract password and
-    redact without needing to import pymongo library
+    Cherry pick code from pymongo.uri_parser.parse_uri to only extract password
+    without needing to import pymongo library
     """
 
     SCHEME = "mongodb://"
@@ -55,7 +60,6 @@ def return_password(uri: str) -> str:
         scheme_free = uri[len(SRV_SCHEME) :]  # noqa: E203
     else:
         logger.error(f"Invalid URI scheme: URI must begin with '{SCHEME}' or '{SRV_SCHEME}'")
-        # raise ValueError(f"Invalid URI scheme: URI must begin with '{SCHEME}' or '{SRV_SCHEME}'")
 
     passwd = None
 
