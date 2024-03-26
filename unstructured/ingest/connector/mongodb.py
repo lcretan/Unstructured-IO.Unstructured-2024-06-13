@@ -4,11 +4,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from dataclasses_json.core import Json
-
+from unstructured.ingest.enhanced_dataclass import enhanced_field
 from unstructured.__version__ import __version__ as unstructured_version
 from unstructured.ingest.enhanced_dataclass.core import _asdict
 from unstructured.ingest.error import DestinationConnectionError, SourceConnectionError, WriteError
 from unstructured.ingest.interfaces import (
+    AccessConfig,
     BaseConnectorConfig,
     BaseDestinationConnector,
     BaseIngestDocBatch,
@@ -27,14 +28,20 @@ if t.TYPE_CHECKING:
 
 
 SERVER_API_VERSION = "1"
+REDACTED_TEXT="***REDACTED***"
 
+def redact_unredact(uri: str, password:str, redacted_text: str, redact: bool = True) -> str:
+    if redact:
+        return uri.replace(password, redacted_text)
+    if not redacted_text == password:
+        return uri.replace(redacted_text, password)
 
 def parse_userinfo(userinfo: str) -> t.Tuple[str, str]:
     user, _, passwd = userinfo.partition(":")
     return user, passwd
 
 
-def redact(uri: str, redacted_text="***REDACTED***") -> str:
+def return_password(uri: str) -> str:
     """
     Cherry pick code from pymongo.uri_parser.parse_uri to only extract password and
     redact without needing to import pymongo library
@@ -47,7 +54,8 @@ def redact(uri: str, redacted_text="***REDACTED***") -> str:
     elif uri.startswith(SRV_SCHEME):
         scheme_free = uri[len(SRV_SCHEME) :]  # noqa: E203
     else:
-        raise ValueError(f"Invalid URI scheme: URI must begin with '{SCHEME}' or '{SRV_SCHEME}'")
+        logger.error(f"Invalid URI scheme: URI must begin with '{SCHEME}' or '{SRV_SCHEME}'")
+        # raise ValueError(f"Invalid URI scheme: URI must begin with '{SCHEME}' or '{SRV_SCHEME}'")
 
     passwd = None
 
@@ -64,13 +72,17 @@ def redact(uri: str, redacted_text="***REDACTED***") -> str:
         userinfo, _, hosts = host_part.rpartition("@")
         _, passwd = parse_userinfo(userinfo)
 
-    if passwd:
-        uri = uri.replace(passwd, redacted_text)
-    return uri
+    # if passwd:
+    #     uri = uri.replace(passwd, redacted_text)
+    return passwd
 
+@dataclass
+class MongoDBAccessConfig(AccessConfig):
+    password: t.Optional[str] = enhanced_field(sensitive=True, default=None)
 
 @dataclass
 class SimpleMongoDBConfig(BaseConnectorConfig):
+    access_config: MongoDBAccessConfig
     uri: t.Optional[str] = None
     host: t.Optional[str] = None
     database: t.Optional[str] = None
@@ -78,18 +90,29 @@ class SimpleMongoDBConfig(BaseConnectorConfig):
     port: int = 27017
     batch_size: int = 100
 
-    def to_dict(
-        self, redact_sensitive=False, redacted_text="***REDACTED***", **kwargs
-    ) -> t.Dict[str, Json]:
-        d = super().to_dict(
-            redact_sensitive=redact_sensitive, redacted_text=redacted_text, **kwargs
-        )
-        if redact_sensitive:
-            if self.host:
-                d["host"] = redact(uri=self.host, redacted_text=redacted_text)
-            if self.uri:
-                d["uri"] = redact(uri=self.uri, redacted_text=redacted_text)
-        return d
+    def __post_init__(self):
+        # if not self.uri and not self.host:
+        print("__post_init__")
+        # print(self)
+        if self.uri and not self.access_config.password and not REDACTED_TEXT in self.uri:
+            self.access_config.password=return_password(self.uri)
+
+        if self.uri and self.access_config.password:
+            self.uri = redact_unredact(self.uri, self.access_config.password, REDACTED_TEXT, redact=True)
+        
+
+    # def to_dict(
+    #     self, redact_sensitive=False, redacted_text="***REDACTED***", **kwargs
+    # ) -> t.Dict[str, Json]:
+    #     d = super().to_dict(
+    #         redact_sensitive=redact_sensitive, redacted_text=redacted_text, **kwargs
+    #     )
+    #     if redact_sensitive:
+    #         if self.host:
+    #             d["host"] = redact(uri=self.host, redacted_text=redacted_text)
+    #         if self.uri:
+    #             d["uri"] = redact(uri=self.uri, redacted_text=redacted_text)
+    #     return d
 
     @requires_dependencies(["pymongo"], extras="mongodb")
     def generate_client(self) -> "MongoClient":
@@ -97,9 +120,12 @@ class SimpleMongoDBConfig(BaseConnectorConfig):
         from pymongo.driver_info import DriverInfo
         from pymongo.server_api import ServerApi
 
+        print("generate_client")
+
         if self.uri:
+            # print(self)
             return MongoClient(
-                self.uri,
+                host=redact_unredact(self.uri, self.access_config.password, redacted_text=REDACTED_TEXT, redact=False),
                 server_api=ServerApi(version=SERVER_API_VERSION),
                 driver=DriverInfo(name="unstructured", version=unstructured_version),
             )
@@ -302,6 +328,8 @@ class MongoDBDestinationConnector(BaseDestinationConnector):
 
     @requires_dependencies(["pymongo"], extras="mongodb")
     def check_connection(self):
+        print("check_connection")
+        # print(self)
         try:
             self.client.admin.command("ping")
         except Exception as e:
