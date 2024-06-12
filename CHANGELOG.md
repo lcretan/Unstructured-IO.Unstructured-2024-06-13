@@ -1,8 +1,10 @@
-## 0.14.6-dev3
+## 0.14.6-dev4
 
 ### Enhancements
 
 ### Features
+
+* **tqdm ingest support** add optional flag to ingest flow to print out progress bar of each step in the process.
 
 ### Fixes
 * **Fix passing parameters to python-client** - Remove parsing list arguments to strings in passing arguments to python-client in Ingest workflow and `partition_via_api`
